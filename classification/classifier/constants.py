@@ -8,13 +8,6 @@ Owner: Owner 3 — Classification
 # Must match the class names your Roboflow model produces (case-insensitive).
 SUSPICIOUS_LABELS: frozenset[str] = frozenset({
     "hcc",
-    "hepatocellular carcinoma",
-    "lesion",
-    "nodule",
-    "observation",
-    "suspicious",
-    "mass",
-    "tumor",
 })
 
 # Detections below this confidence threshold are ignored.
