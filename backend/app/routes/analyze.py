@@ -3,10 +3,17 @@ POST /api/analyze-ultrasound
 
 Owner: Owner 2 — Backend
 
-Orchestrates: file validation → Roboflow inference → normalization →
-classification → response assembly.
+Orchestrates the full analysis pipeline:
+  1. Validate uploaded image (type, size, decodability)
+  2. Send image to Roboflow for object-detection inference
+  3. Normalize raw vendor payload → InternalDetection[]
+  4. Run the US LI-RADS classification rules engine
+  5. Assemble and return the AnalyzeResponse
 """
 
+from __future__ import annotations
+
+import logging
 import uuid
 from typing import Optional
 
@@ -17,41 +24,80 @@ from ..schemas.response import AnalyzeResponse, DetectionOut, LargestObservation
 from ..services.roboflow_client import RoboflowClient, RoboflowError
 from ..utils.file_validation import validate_image_upload
 
-# Import classification module (path added in main.py)
 from classifier.models import InternalDetection
 from classifier.rules import classify
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
-_roboflow = RoboflowClient()
+
+# Shared client instance — lifecycle managed by the FastAPI lifespan in main.py
+roboflow_client = RoboflowClient()
 
 
 @router.post("/analyze-ultrasound", response_model=AnalyzeResponse)
 async def analyze_ultrasound(
-    image: UploadFile = File(..., description="Liver ultrasound image (JPEG/PNG/WEBP)"),
+    image: UploadFile = File(
+        ..., description="Liver ultrasound image (JPEG/PNG/WEBP, max 20 MB)"
+    ),
     px_per_mm: Optional[float] = Form(
         default=None,
-        description="Physical calibration factor (pixels per mm). "
-                    "If omitted, size_mm will be null.",
+        description=(
+            "Physical calibration factor (pixels per mm). "
+            "If omitted, size_mm will be null and classification "
+            "conservatively defaults to US-3 when a suspicious "
+            "observation is present."
+        ),
         gt=0,
     ),
 ) -> AnalyzeResponse:
-    # 1. Validate uploaded file
+    # ── 1. Validate uploaded file ────────────────────────────────────────
     image_bytes = await image.read()
-    validate_image_upload(image.filename or "", image.content_type or "", image_bytes)
+    validate_image_upload(
+        filename=image.filename or "",
+        content_type=image.content_type or "",
+        image_bytes=image_bytes,
+    )
+    logger.info(
+        "Image validated: %s (%d bytes, %s)",
+        image.filename,
+        len(image_bytes),
+        image.content_type,
+    )
 
-    # 2. Run Roboflow inference
+    # ── 2. Run Roboflow inference ────────────────────────────────────────
     try:
-        raw_response = await _roboflow.infer(image_bytes, filename=image.filename or "image.jpg")
+        raw_response = await roboflow_client.infer(
+            image_bytes, filename=image.filename or "image.jpg"
+        )
     except RoboflowError as exc:
-        raise HTTPException(status_code=502, detail=f"Roboflow inference failed: {exc}")
+        logger.error("Roboflow inference failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Roboflow inference failed: {exc}",
+        )
 
-    # 3. Normalize raw vendor payload → InternalDetection[]
-    detections: list[InternalDetection] = normalize_detections(raw_response)
+    # ── 3. Normalize vendor payload → InternalDetection[] ────────────────
+    try:
+        detections: list[InternalDetection] = normalize_detections(raw_response)
+    except ValueError as exc:
+        logger.error("Normalization failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Roboflow returned malformed data: {exc}",
+        )
 
-    # 4. Classify
+    logger.info("Normalized %d detection(s)", len(detections))
+
+    # ── 4. Classify ──────────────────────────────────────────────────────
     result = classify(detections, px_per_mm=px_per_mm)
+    logger.info(
+        "Classification: %s (observations: %s)",
+        result.us_class,
+        result.largest_observation.present if result.largest_observation else False,
+    )
 
-    # 5. Assemble response
+    # ── 5. Assemble response ─────────────────────────────────────────────
     obs = result.largest_observation
     largest_out = LargestObservationOut(
         present=obs.present if obs else False,
@@ -76,6 +122,6 @@ async def analyze_ultrasound(
         reasoning=result.reasoning,
         largest_observation=largest_out,
         detections=detections_out,
-        annotated_image_url=None,   # placeholder for future artifact storage
+        annotated_image_url=None,
         warnings=result.warnings,
     )

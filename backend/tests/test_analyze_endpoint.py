@@ -3,7 +3,8 @@ Contract / integration tests for POST /api/analyze-ultrasound.
 
 Owner: Owner 2 — Backend
 
-Uses pytest + httpx TestClient. Roboflow calls are mocked — no real API key needed.
+Uses pytest + httpx TestClient.  Roboflow calls are mocked — no real
+API key is needed.
 """
 
 import io
@@ -43,18 +44,19 @@ MOCK_ROBOFLOW_RESPONSE = load_fixture("sample_roboflow_response.json")
 MOCK_EMPTY_RESPONSE = {"predictions": []}
 
 
-def post_image(image_bytes: bytes, extra_fields: dict | None = None) -> dict:
+def post_image(image_bytes: bytes, extra_fields: dict | None = None):
     files = {"image": ("test.jpg", io.BytesIO(image_bytes), "image/jpeg")}
     data = extra_fields or {}
-    response = client.post("/api/analyze-ultrasound", files=files, data=data)
-    return response
+    return client.post("/api/analyze-ultrasound", files=files, data=data)
 
+
+# ── Contract tests ─────────────────────────────────────────────────────────
 
 class TestAnalyzeEndpointContract:
-    """Verify that response shape matches the API contract."""
+    """Verify that response shape matches shared/api-contract.md."""
 
     @patch(
-        "app.routes.analyze._roboflow.infer",
+        "app.routes.analyze.roboflow_client.infer",
         new_callable=AsyncMock,
         return_value=MOCK_ROBOFLOW_RESPONSE,
     )
@@ -71,7 +73,7 @@ class TestAnalyzeEndpointContract:
         assert "warnings" in body
 
     @patch(
-        "app.routes.analyze._roboflow.infer",
+        "app.routes.analyze.roboflow_client.infer",
         new_callable=AsyncMock,
         return_value=MOCK_ROBOFLOW_RESPONSE,
     )
@@ -80,7 +82,7 @@ class TestAnalyzeEndpointContract:
         assert body["classification"] in ("US-1", "US-2", "US-3")
 
     @patch(
-        "app.routes.analyze._roboflow.infer",
+        "app.routes.analyze.roboflow_client.infer",
         new_callable=AsyncMock,
         return_value=MOCK_EMPTY_RESPONSE,
     )
@@ -90,7 +92,7 @@ class TestAnalyzeEndpointContract:
         assert body["largest_observation"]["present"] is False
 
     @patch(
-        "app.routes.analyze._roboflow.infer",
+        "app.routes.analyze.roboflow_client.infer",
         new_callable=AsyncMock,
         return_value=MOCK_ROBOFLOW_RESPONSE,
     )
@@ -100,15 +102,67 @@ class TestAnalyzeEndpointContract:
         assert len(body["warnings"]) > 0
 
     @patch(
-        "app.routes.analyze._roboflow.infer",
+        "app.routes.analyze.roboflow_client.infer",
         new_callable=AsyncMock,
         return_value=MOCK_ROBOFLOW_RESPONSE,
     )
-    def test_result_id_is_string(self, _mock):
+    def test_result_id_is_uuid_string(self, _mock):
         body = post_image(make_jpeg_bytes()).json()
         assert isinstance(body["result_id"], str)
         assert len(body["result_id"]) > 0
 
+    @patch(
+        "app.routes.analyze.roboflow_client.infer",
+        new_callable=AsyncMock,
+        return_value=MOCK_ROBOFLOW_RESPONSE,
+    )
+    def test_detections_list_has_correct_shape(self, _mock):
+        body = post_image(make_jpeg_bytes()).json()
+        assert isinstance(body["detections"], list)
+        for det in body["detections"]:
+            assert "label" in det
+            assert "confidence" in det
+            assert "bbox_xywh" in det
+            assert len(det["bbox_xywh"]) == 4
+
+    @patch(
+        "app.routes.analyze.roboflow_client.infer",
+        new_callable=AsyncMock,
+        return_value=MOCK_ROBOFLOW_RESPONSE,
+    )
+    def test_largest_observation_shape(self, _mock):
+        body = post_image(make_jpeg_bytes()).json()
+        obs = body["largest_observation"]
+        assert "present" in obs
+        assert "label" in obs
+        assert "confidence" in obs
+        assert "size_px" in obs
+        assert "size_mm" in obs
+
+    @patch(
+        "app.routes.analyze.roboflow_client.infer",
+        new_callable=AsyncMock,
+        return_value=MOCK_ROBOFLOW_RESPONSE,
+    )
+    def test_px_per_mm_populates_size_mm(self, _mock):
+        body = post_image(make_jpeg_bytes(), extra_fields={"px_per_mm": "3.5"}).json()
+        obs = body["largest_observation"]
+        if obs["present"]:
+            assert obs["size_mm"] is not None
+
+    @patch(
+        "app.routes.analyze.roboflow_client.infer",
+        new_callable=AsyncMock,
+        return_value=MOCK_ROBOFLOW_RESPONSE,
+    )
+    def test_no_px_per_mm_leaves_size_mm_null(self, _mock):
+        body = post_image(make_jpeg_bytes()).json()
+        obs = body["largest_observation"]
+        if obs["present"]:
+            assert obs["size_mm"] is None
+
+
+# ── File validation tests ──────────────────────────────────────────────────
 
 class TestFileValidation:
     def test_missing_image_returns_422(self):
@@ -131,22 +185,34 @@ class TestFileValidation:
         assert resp.status_code == 400
 
 
+# ── Roboflow error handling ───────────────────────────────────────────────
+
 class TestRoboflowFailure:
-    @patch(
-        "app.routes.analyze._roboflow.infer",
-        new_callable=AsyncMock,
-        side_effect=Exception("timeout"),
-    )
-    def test_roboflow_error_returns_502(self, _mock):
+    @patch("app.routes.analyze.roboflow_client.infer", new_callable=AsyncMock)
+    def test_roboflow_error_returns_502(self, mock_infer):
         from app.services.roboflow_client import RoboflowError
-        _mock.side_effect = RoboflowError("timeout")
+
+        mock_infer.side_effect = RoboflowError("timeout")
         resp = post_image(make_jpeg_bytes())
         assert resp.status_code == 502
         assert "Roboflow inference failed" in resp.json()["detail"]
 
+    @patch("app.routes.analyze.roboflow_client.infer", new_callable=AsyncMock)
+    def test_roboflow_rate_limit_returns_502(self, mock_infer):
+        from app.services.roboflow_client import RoboflowError
+
+        mock_infer.side_effect = RoboflowError("Roboflow rate limit exceeded. Retry after 60s.")
+        resp = post_image(make_jpeg_bytes())
+        assert resp.status_code == 502
+        assert "rate limit" in resp.json()["detail"].lower()
+
+
+# ── Health endpoint ───────────────────────────────────────────────────────
 
 class TestHealth:
     def test_health_returns_ok(self):
         resp = client.get("/api/health")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "version" in body
