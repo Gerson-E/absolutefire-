@@ -1,0 +1,28 @@
+{
+  "_comment": "Example raw Roboflow inference response (object detection model).",
+  "time": 0.048,
+  "image": {
+    "width": 640,
+    "height": 480
+  },
+  "predictions": [
+    {
+      "x": 320.5,
+      "y": 240.3,
+      "width": 45.2,
+      "height": 38.1,
+      "confidence": 0.87,
+      "class": "HCC",
+      "class_id": 0
+    },
+    {
+      "x": 110.0,
+      "y": 150.0,
+      "width": 12.5,
+      "height": 10.8,
+      "confidence": 0.41,
+      "class": "nodule",
+      "class_id": 1
+    }
+  ]
+}
