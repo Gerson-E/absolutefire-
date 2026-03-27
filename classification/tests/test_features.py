@@ -33,11 +33,11 @@ def make_detection(
 
 class TestIsSuspicious:
     def test_known_suspicious_labels(self):
-        for label in ["HCC", "hcc", "lesion", "nodule", "Observation", "MASS"]:
+        for label in ["HCC", "hcc"]:
             assert is_suspicious(make_detection(label, 0.9)), f"{label} should be suspicious"
 
     def test_non_suspicious_labels(self):
-        for label in ["liver", "vessel", "artifact", "background"]:
+        for label in ["liver", "vessel", "artifact", "background", "lesion", "nodule", "K", "LVR", "PV"]:
             assert not is_suspicious(make_detection(label, 0.9)), f"{label} should not be suspicious"
 
 
@@ -98,7 +98,7 @@ class TestExtractLargestObservation:
     def test_returns_largest_suspicious(self):
         detections = [
             make_detection("HCC", 0.87, w=45.0, h=38.0),
-            make_detection("lesion", 0.55, w=12.0, h=11.0),
+            make_detection("HCC", 0.55, w=12.0, h=11.0),
         ]
         obs = extract_largest_observation(detections)
         assert obs.present is True

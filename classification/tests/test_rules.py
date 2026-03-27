@@ -61,10 +61,10 @@ class TestUS2:
         assert result.us_class == "US-2"
 
     def test_reasoning_mentions_label(self):
-        detections = [make_detection("lesion", 0.6, w=9.0, h=9.0)]
+        detections = [make_detection("HCC", 0.6, w=9.0, h=9.0)]
         result = classify(detections, px_per_mm=3.5)
         assert result.us_class == "US-2"
-        assert any("lesion" in r.lower() for r in result.reasoning)
+        assert any("hcc" in r.lower() for r in result.reasoning)
 
 
 # ── US-3 ──────────────────────────────────────────────────────────────────────
@@ -106,16 +106,16 @@ class TestGeneral:
 
     def test_multiple_detections_uses_largest(self):
         detections = [
-            make_detection("HCC", 0.9, w=80.0, h=70.0),   # larger
-            make_detection("lesion", 0.6, w=12.0, h=10.0), # smaller
+            make_detection("HCC", 0.9, w=80.0, h=70.0),  # larger
+            make_detection("HCC", 0.6, w=12.0, h=10.0),  # smaller
         ]
         result = classify(detections, px_per_mm=3.5)
-        assert result.largest_observation.label == "HCC"
+        assert result.largest_observation.size_px == 80.0
 
     def test_low_confidence_detections_noted_in_reasoning(self):
         detections = [
             make_detection("HCC", 0.9),
-            make_detection("nodule", 0.05),  # below threshold
+            make_detection("HCC", 0.05),  # below threshold
         ]
         result = classify(detections)
         assert any("dropped" in r.lower() for r in result.reasoning)

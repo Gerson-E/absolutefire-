@@ -6,15 +6,15 @@
     "bbox_xywh": [320.5, 240.3, 45.2, 38.1]
   },
   {
-    "_name": "low_confidence_nodule_small",
-    "label": "nodule",
+    "_name": "low_confidence_hcc_dropped",
+    "label": "HCC",
     "confidence": 0.22,
     "bbox_xywh": [110.0, 150.0, 8.0, 7.5]
   },
   {
-    "_name": "medium_confidence_lesion_subthreshold",
-    "label": "lesion",
-    "confidence": 0.55,
-    "bbox_xywh": [200.0, 180.0, 12.5, 11.0]
+    "_name": "non_suspicious_kidney",
+    "label": "K",
+    "confidence": 0.584,
+    "bbox_xywh": [78.0, 186.5, 156.0, 115.0]
   }
 ]
