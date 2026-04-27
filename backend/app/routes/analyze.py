@@ -50,6 +50,15 @@ async def analyze_ultrasound(
         ),
         gt=0,
     ),
+    observation_size_px: Optional[float] = Form(
+        default=None,
+        description=(
+            "Manually measured longest dimension of the confirmed tumor "
+            "in pixels. When provided, Roboflow inference is skipped and "
+            "this value is used directly for LI-RADS size classification."
+        ),
+        gt=0,
+    ),
 ) -> AnalyzeResponse:
     # ── 1. Validate uploaded file ────────────────────────────────────────
     image_bytes = await image.read()
@@ -65,27 +74,41 @@ async def analyze_ultrasound(
         image.content_type,
     )
 
-    # ── 2. Run Roboflow inference ────────────────────────────────────────
-    try:
-        raw_response = await roboflow_client.infer(
-            image_bytes, filename=image.filename or "image.jpg"
+    # ── 2. Build detections ──────────────────────────────────────────────
+    if observation_size_px is not None:
+        # Manual mode: confirmed tumor, skip Roboflow
+        logger.info(
+            "Manual observation_size_px=%.1f provided — skipping Roboflow",
+            observation_size_px,
         )
-    except RoboflowError as exc:
-        logger.error("Roboflow inference failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Roboflow inference failed: {exc}",
-        )
+        detections: list[InternalDetection] = [
+            InternalDetection(
+                label="hcc",
+                confidence=1.0,
+                bbox_xywh=[0.0, 0.0, observation_size_px, observation_size_px],
+            )
+        ]
+    else:
+        # Auto mode: run Roboflow inference
+        try:
+            raw_response = await roboflow_client.infer(
+                image_bytes, filename=image.filename or "image.jpg"
+            )
+        except RoboflowError as exc:
+            logger.error("Roboflow inference failed: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Roboflow inference failed: {exc}",
+            )
 
-    # ── 3. Normalize vendor payload → InternalDetection[] ────────────────
-    try:
-        detections: list[InternalDetection] = normalize_detections(raw_response)
-    except ValueError as exc:
-        logger.error("Normalization failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Roboflow returned malformed data: {exc}",
-        )
+        try:
+            detections = normalize_detections(raw_response)
+        except ValueError as exc:
+            logger.error("Normalization failed: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Roboflow returned malformed data: {exc}",
+            )
 
     logger.info("Normalized %d detection(s)", len(detections))
 
